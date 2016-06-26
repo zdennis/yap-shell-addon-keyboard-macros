@@ -3,7 +3,7 @@ require 'yap-shell-addon-keyboard-macros/pretty_print_key'
 
 module YapShellAddonKeyboardMacros
   class Addon < ::Yap::Addon::Base
-    self.export_as :keyboard_macros
+    self.export_as :'keyboard-macros'
 
     include PrettyPrintKey
 
