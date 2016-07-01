@@ -29,27 +29,27 @@ module YapShellAddonKeyboardMacros
     end
 
     def cancel_key=(key)
-      debug_log "setting default cancel_key key=#{ppk(key)}"
+      logger.puts "setting default cancel_key key=#{ppk(key)}"
       @cancel_key = key
     end
 
     def cancel_on_unknown_sequences=(true_or_false)
-      debug_log "setting default cancel_on_unknown_sequences=#{true_or_false}"
+      logger.puts "setting default cancel_on_unknown_sequences=#{true_or_false}"
       @cancel_on_unknown_sequences = true_or_false
     end
 
     def timeout_in_ms=(milliseconds)
-      debug_log "setting default timeout_in_ms milliseconds=#{milliseconds.inspect}"
+      logger.puts "setting default timeout_in_ms milliseconds=#{milliseconds.inspect}"
       @timeout_in_ms = milliseconds
     end
 
     def trigger_key=(key)
-      debug_log "setting default trigger_key key=#{ppk(key)}"
+      logger.puts "setting default trigger_key key=#{ppk(key)}"
       @trigger_key = key
     end
 
     def configure(cancel_key: nil, trigger_key: nil, &blk)
-      debug_log "configure cancel_key=#{ppk(cancel_key)} trigger_key=#{ppk(trigger_key)} block_given?=#{block_given?}"
+      logger.puts "configure cancel_key=#{ppk(cancel_key)} trigger_key=#{ppk(trigger_key)} block_given?=#{block_given?}"
 
       cancel_key ||= @cancel_key
       trigger_key ||= @trigger_key
@@ -71,14 +71,14 @@ module YapShellAddonKeyboardMacros
 
       world.unbind(trigger_key)
       world.bind(trigger_key) do
-        debug_log "macro triggered key=#{ppk(trigger_key)}"
+        logger.puts "macro triggered key=#{ppk(trigger_key)}"
 
         begin
           @previous_result = nil
           @stack << OpenStruct.new(configuration: configuration)
           configuration.start.call if configuration.start
 
-          debug_log "taking over keyboard input processing from editor"
+          logger.puts "taking over keyboard input processing from editor"
           world.editor.push_keyboard_input_processor(self)
 
           wait_timeout_in_seconds = 0.1
@@ -92,7 +92,7 @@ module YapShellAddonKeyboardMacros
     end
 
     def cycle(name, &cycle_thru_blk)
-      debug_log "defining cycle name=#{name.inspect}"
+      logger.puts "defining cycle name=#{name.inspect}"
 
       @cycles ||= {}
       if block_given?
@@ -179,17 +179,17 @@ module YapShellAddonKeyboardMacros
     end
 
     def cancel_processing
-      debug_log "cancel_processing"
+      logger.puts "cancel_processing"
       @event_id = nil
       @stack.reverse.each do |definition|
         definition.configuration.stop.call if definition.configuration.stop
       end
       @stack.clear
       if world.editor.keyboard_input_processor == self
-        debug_log "giving keyboard input processing control back"
+        logger.puts "giving keyboard input processing control back"
         world.editor.pop_keyboard_input_processor
 
-        debug_log "restoring default editor input timeout"
+        logger.puts "restoring default editor input timeout"
         world.editor.input.restore_default_timeout
       end
     end
@@ -212,8 +212,8 @@ module YapShellAddonKeyboardMacros
 
       attr_reader :cancellation, :trigger_key, :keymap
 
-      def debug_log(*args)
-        Addon.debug_log(*args)
+      def logger
+        Addon.logger
       end
 
       def initialize(cancellation: nil, editor:, keymap: {}, trigger_key: nil)
@@ -226,7 +226,7 @@ module YapShellAddonKeyboardMacros
         @on_stop_blk = nil
         @cycles = {}
 
-        debug_log "configuring a macro trigger_key=#{ppk(trigger_key)}"
+        logger.puts "configuring a macro trigger_key=#{ppk(trigger_key)}"
 
         if @cancellation
           define @cancellation.cancel_key, -> { @cancellation.call }
@@ -244,7 +244,7 @@ module YapShellAddonKeyboardMacros
       end
 
       def cycle(name, &cycle_thru_blk)
-        debug_log "defining a cycle on macro name=#{name.inspect}"
+        logger.puts "defining a cycle on macro name=#{name.inspect}"
 
         if block_given?
           cycle = YapShellAddonKeyboardMacros::Cycle.new(
@@ -264,7 +264,7 @@ module YapShellAddonKeyboardMacros
       end
 
       def define(sequence, result=nil, fragment: false, &blk)
-        debug_log "defining macro sequence=#{sequence.inspect} result=#{result.inspect} fragment=#{fragment.inspect} under macro #{ppk(trigger_key)}"
+        logger.puts "defining macro sequence=#{sequence.inspect} result=#{result.inspect} fragment=#{fragment.inspect} under macro #{ppk(trigger_key)}"
         unless result.respond_to?(:call)
           string_result = result
           result = -> { string_result }
