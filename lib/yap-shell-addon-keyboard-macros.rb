@@ -1,3 +1,5 @@
+require 'yap/addon'
+require 'yap-shell-addon-keyboard-macros/version'
 require 'yap-shell-addon-keyboard-macros/cycle'
 require 'yap-shell-addon-keyboard-macros/pretty_print_key'
 
