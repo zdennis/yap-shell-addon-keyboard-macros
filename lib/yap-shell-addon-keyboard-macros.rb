@@ -123,7 +123,7 @@ module YapShellAddonKeyboardMacros
         definition = configuration[byte]
         if !definition
           cancel_processing if cancel_on_unknown_sequences
-          break
+          return bytes[i..-1] # short-circuit out, left over bytes
         end
 
         configuration = definition.configuration
@@ -154,6 +154,8 @@ module YapShellAddonKeyboardMacros
 
         process_result(result)
       end
+
+      []
     end
 
     private
@@ -185,13 +187,12 @@ module YapShellAddonKeyboardMacros
         definition.configuration.stop.call if definition.configuration.stop
       end
       @stack.clear
-      if world.editor.keyboard_input_processor == self
-        logger.puts "giving keyboard input processing control back"
-        world.editor.pop_keyboard_input_processor
 
-        logger.puts "restoring default editor input timeout"
-        world.editor.input.restore_default_timeout
-      end
+      logger.puts "giving keyboard input processing control back"
+      world.editor.pop_keyboard_input_processor
+
+      logger.puts "restoring default editor input timeout"
+      world.editor.input.restore_default_timeout
     end
 
     class Cancellation
