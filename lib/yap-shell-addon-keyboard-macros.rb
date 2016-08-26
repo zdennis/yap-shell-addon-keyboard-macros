@@ -1,5 +1,9 @@
 require 'yap/addon'
 require 'yap-shell-addon-keyboard-macros/version'
+require 'yap-shell-addon-keyboard-macros/mode'
+require 'yap-shell-addon-keyboard-macros/cancellation'
+require 'yap-shell-addon-keyboard-macros/configuration'
+require 'yap-shell-addon-keyboard-macros/definition'
 require 'yap-shell-addon-keyboard-macros/cycle'
 require 'yap-shell-addon-keyboard-macros/pretty_print_key'
 
@@ -20,12 +24,18 @@ module YapShellAddonKeyboardMacros
 
     def initialize_world(world)
       @world = world
+      @world.editor.register_mode Mode
+
       @configurations = []
       @stack = []
       @timeout_in_ms = DEFAULT_TIMEOUT_IN_MS
       @cancel_key = DEFAULT_CANCEL_KEY
       @trigger_key = DEFAULT_TRIGGER_KEY
       @cancel_on_unknown_sequences = false
+    end
+
+    def mode
+      Mode
     end
 
     def cancel_key=(key)
@@ -72,17 +82,15 @@ module YapShellAddonKeyboardMacros
       world.unbind(trigger_key)
       world.bind(trigger_key) do
         logger.puts "macro triggered key=#{ppk(trigger_key)}"
+        world.editor.activate_mode Mode.name
 
         begin
           @previous_result = nil
           @stack << OpenStruct.new(configuration: configuration)
           configuration.start.call if configuration.start
-
-          logger.puts "taking over keyboard input processing from editor"
-          world.editor.push_keyboard_input_processor(self)
-
           wait_timeout_in_seconds = 0.1
           world.editor.input.wait_timeout_in_seconds = wait_timeout_in_seconds
+          Mode.on_read_bytes = -> (bytes) { on_mode_read_bytes(bytes) }
         ensure
           queue_up_remove_input_processor(&configuration.stop)
         end
@@ -109,11 +117,9 @@ module YapShellAddonKeyboardMacros
       end
     end
 
-    #
-    # InputProcessor Methods
-    #
+    private
 
-    def read_bytes(bytes)
+    def on_mode_read_bytes(bytes)
       if @stack.last
         current_definition = @stack.last
         configuration = current_definition.configuration
@@ -158,8 +164,6 @@ module YapShellAddonKeyboardMacros
       []
     end
 
-    private
-
     def process_result(result)
       if result.is_a?(String)
         @world.editor.write result, add_to_line_history: false
@@ -188,229 +192,10 @@ module YapShellAddonKeyboardMacros
       end
       @stack.clear
 
-      logger.puts "giving keyboard input processing control back"
-      world.editor.pop_keyboard_input_processor
-
       logger.puts "restoring default editor input timeout"
       world.editor.input.restore_default_timeout
-    end
 
-    class Cancellation
-      attr_reader :cancel_key
-
-      def initialize(cancel_key: , &blk)
-        @cancel_key = cancel_key
-        @blk = blk
-      end
-
-      def call
-        @blk.call
-      end
-    end
-
-    class Configuration
-      include PrettyPrintKey
-
-      attr_reader :cancellation, :trigger_key, :keymap
-
-      def logger
-        Addon.logger
-      end
-
-      def initialize(cancellation: nil, editor:, keymap: {}, trigger_key: nil)
-        @cancellation = cancellation
-        @editor = editor
-        @keymap = keymap
-        @trigger_key = trigger_key
-        @storage = {}
-        @on_start_blk = nil
-        @on_stop_blk = nil
-        @cycles = {}
-
-        logger.puts "configuring a macro trigger_key=#{ppk(trigger_key)}"
-
-        if @cancellation
-          define @cancellation.cancel_key, -> { @cancellation.call }
-        end
-      end
-
-      def start(&blk)
-        @on_start_blk = blk if blk
-        @on_start_blk
-      end
-
-      def stop(&blk)
-        @on_stop_blk = blk if blk
-        @on_stop_blk
-      end
-
-      def cycle(name, &cycle_thru_blk)
-        logger.puts "defining a cycle on macro name=#{name.inspect}"
-
-        if block_given?
-          cycle = YapShellAddonKeyboardMacros::Cycle.new(
-            cycle_proc: cycle_thru_blk,
-            on_cycle_proc: -> (old_value, new_value) {
-              @editor.delete_n_characters(old_value.to_s.length)
-            }
-          )
-          @cycles[name] = cycle
-        else
-          @cycles.fetch(name)
-        end
-      end
-
-      def fragment(sequence, result)
-        define(sequence, result, fragment: true)
-      end
-
-      def define(sequence, result=nil, fragment: false, &blk)
-        logger.puts "defining macro sequence=#{sequence.inspect} result=#{result.inspect} fragment=#{fragment.inspect} under macro #{ppk(trigger_key)}"
-        unless result.respond_to?(:call)
-          string_result = result
-          result = -> { string_result }
-        end
-
-        case sequence
-        when String
-          recursively_define_sequence_for_bytes(
-            self,
-            sequence.bytes,
-            result,
-            fragment: fragment,
-            &blk
-          )
-        when Symbol
-          recursively_define_sequence_for_bytes(
-            self,
-            @keymap.fetch(sequence){
-              fail "Cannot bind unknown sequence #{sequence.inspect}"
-            },
-            result,
-            fragment: fragment,
-            &blk
-          )
-        when Regexp
-          define_sequence_for_regex(sequence, result, fragment: fragment, &blk)
-        else
-          raise NotImplementedError, <<-EOT.gsub(/^\s*/, '')
-            Don't know how to define macro for sequence: #{sequence.inspect}
-          EOT
-        end
-      end
-
-      def [](byte)
-        @storage.values.detect { |definition| definition.matches?(byte) }
-      end
-
-      def []=(key, definition)
-        @storage[key] = definition
-      end
-
-      def inspect
-        str = @storage.map{ |k,v| "#{k}=#{v.inspect}" }.join("\n  ")
-        num_items = @storage.reduce(0) { |s, arr| s + arr.length }
-        "<Configuration num_items=#{num_items} stored_keys=#{str}>"
-      end
-
-      private
-
-      def define_sequence_for_regex(regex, result, fragment: false, &blk)
-        @storage[regex] = Definition.new(
-          configuration: Configuration.new(
-            cancellation: @cancellation,
-            keymap: @keymap,
-            editor: @editor
-          ),
-          fragment: fragment,
-          sequence: regex,
-          result: result,
-          &blk
-        )
-      end
-
-      def recursively_define_sequence_for_bytes(configuration, bytes, result, fragment: false, &blk)
-        byte, rest = bytes[0], bytes[1..-1]
-        if rest.any?
-          definition = if configuration[byte]
-            configuration[byte]
-          else
-            Definition.new(
-              configuration: Configuration.new(
-                cancellation: @cancellation,
-                keymap: @keymap,
-                editor: @editor
-              ),
-              fragment: fragment,
-              sequence: byte,
-              result: nil
-            )
-          end
-          blk.call(definition.configuration) if blk
-          configuration[byte] = definition
-          recursively_define_sequence_for_bytes(
-            definition.configuration,
-            rest,
-            result,
-            fragment: fragment,
-            &blk
-          )
-        else
-          definition = Definition.new(
-            configuration: Configuration.new(
-              keymap: @keymap,
-              editor: @editor
-            ),
-            fragment: fragment,
-            sequence: byte,
-            result: result
-          )
-          configuration[byte] = definition
-          blk.call(definition.configuration) if blk
-          definition
-        end
-      end
-    end
-
-    class Definition
-      attr_reader :configuration, :result, :sequence
-
-      def initialize(configuration: nil, fragment: false, sequence:, result: nil)
-        @fragment = fragment
-        @configuration = configuration
-        @sequence = sequence
-        @result = result
-      end
-
-      def inspect
-        "<Definition fragment=#{@fragment.inspect} sequence=#{@sequence.inspect} result=#{@result.inspect} configuration=#{@configuration.inspect}>"
-      end
-
-      def fragment?
-        @fragment
-      end
-
-      def matches?(byte)
-        if @sequence.is_a?(Regexp)
-          @match_data = @sequence.match(byte.chr)
-        else
-          @sequence == byte
-        end
-      end
-
-      def process
-        if @result
-          if @match_data
-            if @match_data.captures.empty?
-              @result.call(@match_data[0])
-            else
-              @result.call(*@match_data.captures)
-            end
-          else
-            @result.call
-          end
-        end
-      end
+      world.editor.deactivate_mode Mode.name
     end
   end
 end
